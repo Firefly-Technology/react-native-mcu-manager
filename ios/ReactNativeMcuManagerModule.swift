@@ -89,6 +89,42 @@ public class ReactNativeMcuManagerModule: Module {
       }
     }
 
+    AsyncFunction("slotsInfo") { (bleId: String, promise: Promise) in
+      guard let bleUuid = UUID(uuidString: bleId) else {
+        promise.reject(Exception(name: "UUIDParseError", description: "Failed to parse UUID"))
+        return
+      }
+
+      let bleTransport = McuMgrBleTransport(bleUuid)
+      let manager = ImageManager(transport: bleTransport)
+
+      manager.list { (response: McuMgrImageStateResponse?, err: Error?) in
+        bleTransport.close()
+
+        if err != nil {
+          promise.reject(Exception(name: "ListSlotsError", description: err!.localizedDescription))
+          return
+        }
+
+        // Add all the image slots
+        var slots = [ImageSlotInfo]()
+        if let images = response?.images {
+          for image in images {
+            slots.append(ImageSlotInfo(
+              id: Field(wrappedValue: image.slot),
+              version: Field(wrappedValue: image.version),
+              hash: Field(wrappedValue: image.hash),
+              pending: Field(wrappedValue: image.pending),
+              confirmed: Field(wrappedValue: image.confirmed)
+            ))
+          }
+        }
+
+        promise.resolve(slots)
+        return
+      }
+    }
+
     Function("createUpgrade") {
       (
         id: String,
