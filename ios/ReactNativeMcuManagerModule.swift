@@ -209,7 +209,6 @@ public class ReactNativeMcuManagerModule: Module {
 
         let shellResponse = ShellCommandResponse()
         shellResponse.output = response.output
-        shellResponse.returnCode = response.ret
 
         promise.resolve(shellResponse)
       }
