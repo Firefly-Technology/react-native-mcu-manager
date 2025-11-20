@@ -1,4 +1,4 @@
-import McuManagerModule from './ReactNativeMcuManagerModule';
+import McuManagerModule from "./ReactNativeMcuManagerModule";
 
 export interface ShellCommandResponse {
   output?: string;
@@ -8,6 +8,5 @@ export interface ShellCommandResponse {
 export const executeShellCommand = McuManagerModule?.executeShellCommand as (
   bleId: string,
   command: string,
-  arguments?: string[]
+  args?: string[]
 ) => Promise<ShellCommandResponse>;
-
