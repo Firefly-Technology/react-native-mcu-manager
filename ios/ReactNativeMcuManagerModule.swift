@@ -176,5 +176,42 @@ public class ReactNativeMcuManagerModule: Module {
         promise.resolve()
       }
     }
+
+    AsyncFunction("executeShellCommand") { (bleId: String, command: String, arguments: [String]?, promise: Promise) in
+      guard let bleUuid = UUID(uuidString: bleId) else {
+        promise.reject(Exception(name: "UUIDParseError", description: "Failed to parse UUID"))
+        return
+      }
+
+      let bleTransport = McuMgrBleTransport(bleUuid)
+      let shellManager = ShellManager(transport: bleTransport)
+
+      let args = arguments ?? []
+
+      shellManager.execute(command: command, arguments: args) { (response: McuMgrExecResponse?, err: Error?) in
+        bleTransport.close()
+
+        if err != nil {
+          promise.reject(Exception(name: "ShellCommandError", description: err!.localizedDescription))
+          return
+        }
+
+        guard let response = response else {
+          promise.reject(Exception(name: "ShellCommandError", description: "Shell command response null, but no error occurred?"))
+          return
+        }
+
+        let smpErr = response.getError()
+        if (smpErr != nil) {
+          promise.reject(Exception(name: "ShellCommandError", description: smpErr!.localizedDescription))
+          return
+        }
+
+        let shellResponse = ShellCommandResponse()
+        shellResponse.output = response.output
+
+        promise.resolve(shellResponse)
+      }
+    }
   }
 }
