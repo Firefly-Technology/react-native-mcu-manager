@@ -102,6 +102,7 @@ public class ReactNativeMcuManagerModule: Module {
         bleTransport.close()
 
         if err != nil {
+          bleTransport.close()
           promise.reject(Exception(name: "ListSlotsError", description: err!.localizedDescription))
           return
         }
@@ -120,6 +121,7 @@ public class ReactNativeMcuManagerModule: Module {
           }
         }
 
+        bleTransport.close()
         promise.resolve(slots)
         return
       }
