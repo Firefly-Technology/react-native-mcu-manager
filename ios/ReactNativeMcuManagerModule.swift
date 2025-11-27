@@ -8,28 +8,68 @@ private let TAG = "McuManagerModule"
 
 public class ReactNativeMcuManagerModule: Module {
   private var upgrades: [String: DeviceUpgrade] = [:]
+  private var transports: [String: McuMgrBleTransport] = [:]
+  private let transportQueue = DispatchQueue(label: "com.firefly.mcumanager.transport")
 
   public func definition() -> ModuleDefinition {
     Name(MODULE_NAME)
 
-    AsyncFunction("bootloaderInfo") { (bleId: String, promise: Promise) in
+    AsyncFunction("connect") { (bleId: String, promise: Promise) in
       guard let bleUuid = UUID(uuidString: bleId) else {
         promise.reject(Exception(name: "UUIDParseError", description: "Failed to parse UUID"))
         return
       }
 
-      let bleTransport = McuMgrBleTransport(bleUuid)
+      self.transportQueue.sync {
+        if self.transports[bleId] != nil {
+          promise.resolve(["status": "already_connected"])
+          return
+        }
+
+        let bleTransport = McuMgrBleTransport(bleUuid)
+        self.transports[bleId] = bleTransport
+        
+        bleTransport.connect { result in
+          switch result {
+          case .connected:
+            promise.resolve(["status": "connected"])
+          case .deferred:
+            promise.resolve(["status": "deferred"])
+          case .failed(let error):
+            self.transports[bleId] = nil
+            promise.reject(Exception(name: "ConnectionError", description: error.localizedDescription))
+          }
+        }
+      }
+    }
+
+    AsyncFunction("disconnect") { (bleId: String, promise: Promise) in
+      self.transportQueue.sync {
+        if let transport = self.transports[bleId] {
+          transport.close()
+          self.transports[bleId] = nil
+          promise.resolve()
+        } else {
+          promise.reject(Exception(name: "NotConnected", description: "No active connection for this device"))
+        }
+      }
+    }
+
+    AsyncFunction("bootloaderInfo") { (bleId: String, promise: Promise) in
+      guard let bleTransport = self.transports[bleId] else {
+        promise.reject(Exception(name: "NotConnected", description: "Device not connected. Call connect() first."))
+        return
+      }
+
       let manager = DefaultManager(transport: bleTransport)
 
       manager.bootloaderInfo(query: DefaultManager.BootloaderInfoQuery.name) { (nameResponse: BootloaderInfoResponse?, err: Error?) in
         if err != nil {
-          bleTransport.close()
           promise.reject(Exception(name: "BootloaderInfoError", description: err!.localizedDescription))
           return
         }
 
         guard let nameResponse = nameResponse else {
-          bleTransport.close()
           promise.reject(Exception(name: "BootloaderInfoError", description: "Bootloader name response null, but no error occurred?"))
           return
         }
@@ -40,73 +80,60 @@ public class ReactNativeMcuManagerModule: Module {
         if nameResponse.bootloader != BootloaderInfoResponse.Bootloader.mcuboot {
           info.mode = nameResponse.mode?.rawValue
           info.noDowngrade = nameResponse.noDowngrade
-
-          bleTransport.close()
           promise.resolve(info)
           return
         }
 
         manager.bootloaderInfo(query: DefaultManager.BootloaderInfoQuery.mode) { (mcubootResponse: BootloaderInfoResponse?, err: Error?) in
-          bleTransport.close()
-
           if err != nil {
-              promise.reject(Exception(name: "BootloaderInfoError", description: err!.localizedDescription))
-              return
+            promise.reject(Exception(name: "BootloaderInfoError", description: err!.localizedDescription))
+            return
           }
 
           guard let mcubootResponse = mcubootResponse else {
-              promise.reject(Exception(name: "BootloaderInfoError", description: "MCUboot response null, but no error occurred?"))
-              return
+            promise.reject(Exception(name: "BootloaderInfoError", description: "MCUboot response null, but no error occurred?"))
+            return
           }
 
           info.mode = mcubootResponse.mode?.rawValue
           info.noDowngrade = mcubootResponse.noDowngrade
-
           promise.resolve(info)
         }
       }
     }
 
     AsyncFunction("eraseImage") { (bleId: String, promise: Promise) in
-      guard let bleUuid = UUID(uuidString: bleId) else {
-        promise.reject(Exception(name: "UUIDParseError", description: "Failed to parse UUID"))
+      guard let bleTransport = self.transports[bleId] else {
+        promise.reject(Exception(name: "NotConnected", description: "Device not connected. Call connect() first."))
         return
       }
 
-      let bleTransport = McuMgrBleTransport(bleUuid)
       let imageManager = ImageManager(transport: bleTransport)
 
       imageManager.erase { (response: McuMgrResponse?, err: Error?) in
-        bleTransport.close()
-
         if err != nil {
           promise.reject(Exception(name: "EraseError", description: err!.localizedDescription))
           return
         }
 
         promise.resolve(nil)
-        return
       }
     }
 
     AsyncFunction("slotsInfo") { (bleId: String, promise: Promise) in
-      guard let bleUuid = UUID(uuidString: bleId) else {
-        promise.reject(Exception(name: "UUIDParseError", description: "Failed to parse UUID"))
+      guard let bleTransport = self.transports[bleId] else {
+        promise.reject(Exception(name: "NotConnected", description: "Device not connected. Call connect() first."))
         return
       }
 
-      let bleTransport = McuMgrBleTransport(bleUuid)
       let manager = ImageManager(transport: bleTransport)
 
       manager.list { (response: McuMgrImageStateResponse?, err: Error?) in
-        bleTransport.close()
-
         if err != nil {
           promise.reject(Exception(name: "ListSlotsError", description: err!.localizedDescription))
           return
         }
 
-        // Add all the image slots
         var slots = [ImageSlotInfo]()
         if let images = response?.images {
           for image in images {
@@ -121,7 +148,6 @@ public class ReactNativeMcuManagerModule: Module {
         }
 
         promise.resolve(slots)
-        return
       }
     }
 
@@ -187,17 +213,14 @@ public class ReactNativeMcuManagerModule: Module {
     }
 
     AsyncFunction("resetDevice") { (bleId: String, promise: Promise) in
-      guard let bleUuid = UUID(uuidString: bleId) else {
-        promise.reject(Exception(name: "UUIDParseError", description: "Failed to parse UUID"))
+      guard let bleTransport = self.transports[bleId] else {
+        promise.reject(Exception(name: "NotConnected", description: "Device not connected. Call connect() first."))
         return
       }
 
-      let bleTransport = McuMgrBleTransport(bleUuid)
       let manager = DefaultManager(transport: bleTransport)
 
       manager.reset { (response: McuMgrResponse?, err: Error?) in
-        bleTransport.close()
-
         if err != nil {
           promise.reject(Exception(name: "ResetError", description: err!.localizedDescription))
           return
@@ -214,19 +237,15 @@ public class ReactNativeMcuManagerModule: Module {
     }
 
     AsyncFunction("executeShellCommand") { (bleId: String, command: String, arguments: [String]?, promise: Promise) in
-      guard let bleUuid = UUID(uuidString: bleId) else {
-        promise.reject(Exception(name: "UUIDParseError", description: "Failed to parse UUID"))
+      guard let bleTransport = self.transports[bleId] else {
+        promise.reject(Exception(name: "NotConnected", description: "Device not connected. Call connect() first."))
         return
       }
 
-      let bleTransport = McuMgrBleTransport(bleUuid)
       let shellManager = ShellManager(transport: bleTransport)
-
       let args = arguments ?? []
 
       shellManager.execute(command: command, arguments: args) { (response: McuMgrExecResponse?, err: Error?) in
-        bleTransport.close()
-
         if err != nil {
           promise.reject(Exception(name: "ShellCommandError", description: err!.localizedDescription))
           return
